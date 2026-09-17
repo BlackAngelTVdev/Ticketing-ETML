@@ -26,18 +26,23 @@ use Glpi\Security\TOTPManager;
 use Html;
 use Profile;
 use Session;
+use Toolbox;
 use User;
 
 final class GlpiLoginService
 {
     /**
-     * @param string $email    Email provided by the SSO portal (may be empty).
-     * @param string $username Login provided by the SSO portal (may be empty).
+     * @param string      $email    Email provided by the SSO portal (may be empty).
+     * @param string      $username Login provided by the SSO portal (may be empty).
+     * @param string|null $redirect GLPI target after login (local path like
+     *                              /ServiceCatalog or /Helpdesk, or a same-host
+     *                              absolute URL). Kept in session so it survives
+     *                              the GLPI MFA pages round-trip.
      *
      * @return string[] Error messages (empty only when this method cannot
      *                  finish: the success path always throws a redirect).
      */
-    public static function login(string $email, string $username): array
+    public static function login(string $email, string $username, ?string $redirect = null): array
     {
         global $DB;
 
@@ -140,7 +145,7 @@ final class GlpiLoginService
                 'username'    => $user->fields['name'],
                 'remember_me' => false,
                 'noauto'      => false,
-                'redirect'    => isset($_GET['redirect']) && is_string($_GET['redirect']) ? $_GET['redirect'] : null,
+                'redirect'    => $redirect,
             ];
 
             if ($totp->is2FAEnabled($usersId)) {
@@ -160,6 +165,11 @@ final class GlpiLoginService
             // Typically: the account has no profile / no right to connect.
             $errors = $auth->getErrors();
             return array_map('strval', count($errors) > 0 ? $errors : ['You are not allowed to connect to GLPI.']);
+        }
+
+        if ($redirect !== null && $redirect !== '') {
+            unset($_SESSION[SsoClient::REDIRECT_KEY]);
+            Toolbox::manageRedirect($redirect);
         }
 
         Auth::redirectIfAuthenticated();

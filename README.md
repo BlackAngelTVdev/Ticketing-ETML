@@ -30,4 +30,4 @@
 
 
 
-callback url = domaine/ServiceCatalog
+callback url = https://domaine.ex/ServiceCatalog

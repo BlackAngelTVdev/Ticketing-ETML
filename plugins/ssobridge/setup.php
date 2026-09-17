@@ -19,6 +19,7 @@
 use Glpi\Http\Firewall;
 use Glpi\Plugin\Hooks;
 use GlpiPlugin\Ssobridge\Config;
+use GlpiPlugin\Ssobridge\SsoClient;
 
 /**
  * Plugin metadata.
@@ -65,6 +66,14 @@ function plugin_ssobridge_uninstall(): bool
 
 /**
  * Hook registration (runs on each request when the plugin is active).
+ *
+ * This function is called by Plugin::load() on every request during the
+ * kernel boot (InitializePlugins listener, priority 110), which is exactly
+ * the right place to intercept a pending SSO login: the session is already
+ * started (SessionStart listener, priority 130 runs before), routing and the
+ * access checks have not run yet, and the RedirectException thrown by
+ * Html::redirect() is re-thrown as-is by the core, so the redirect reaches
+ * the browser before GLPI can answer "session expired".
  */
 function plugin_init_ssobridge(): void
 {
@@ -72,6 +81,11 @@ function plugin_init_ssobridge(): void
 
     // Display an "SSO login" button on the GLPI login page.
     $PLUGIN_HOOKS[Hooks::DISPLAY_LOGIN]['ssobridge'] = 'plugin_ssobridge_display_login';
+
+    // Complete an SSO login when the browser lands on any other GLPI page
+    // than front/callback.php with a pending correlation id (the portal
+    // callback URL may point to /ServiceCatalog, /Helpdesk, ...).
+    SsoClient::processPendingLogin();
 }
 
 /**

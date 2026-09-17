@@ -31,26 +31,33 @@ final class SsoClient
      */
     public const SESSION_KEY = 'ssobridge_correlation_id';
 
+    /**
+     * PHP session key holding the redirect target requested for the pending
+     * SSO login. It may be an absolute URL (e.g. https://host/ServiceCatalog)
+     * even when the portal sends the browser to that URL directly.
+     */
+    public const REDIRECT_KEY = 'ssobridge_redirect';
+
     private const HTTP_TIMEOUT = 10;
 
     /**
      * Start the SSO login: store a correlation id, then redirect the browser
      * to the portal. Never returns on success (redirect is thrown).
      *
-     * @param string|null $redirect Optional GLPI relative URL to come back to after login.
-     *                              Only local paths are accepted: absolute URLs
-     *                              (http://host/...) would bypass the callback
-     *                              entirely and cause a "session expired" loop.
+     * @param string|null $redirect Optional GLPI URL (local path or same-host
+     *                              absolute URL) to come back to after login.
      */
     public static function startLogin(?string $redirect = null): void
     {
         $cid = self::getCorrelationId();
 
-        $callback_uri = self::buildCallbackUri();
         if ($redirect !== null && $redirect !== '') {
-            $sep = (strpos($callback_uri, '?') === false) ? '?' : '&';
-            $callback_uri .= $sep . 'redirect=' . rawurlencode(self::sanitizeRedirect($redirect));
+            $_SESSION[self::REDIRECT_KEY] = self::sanitizeRedirect($redirect);
+        } else {
+            unset($_SESSION[self::REDIRECT_KEY]);
         }
+
+        $callback_uri = self::buildCallbackUri();
 
         $sso_url = Config::portalUrl() . 'redirect'
             . '?correlationId=' . rawurlencode($cid)
@@ -113,31 +120,27 @@ final class SsoClient
     }
 
     /**
-     * Sanitize the "redirect" parameter so the browser always comes back to
-     * the plugin callback first (the only place where the GLPI session can be
-     * opened). Only local relative paths are allowed:
+     * Sanitize the "redirect" target so the browser can come back anywhere on
+     * this GLPI instance after the SSO round-trip:
      *
-     *   - absolute URLs (http://ip/Helpdesk), scheme-relative (//host/...)
-     *     and URLs with a host are refused -> fall back to /front/central.php;
-     *   - a query string is preserved inside the final redirect (forwarded
-     *     through /front/central.php?redirect=...), a fragment is dropped;
-     *   - control characters / CR-LF (header injection attempts) are refused.
+     *   - absolute URLs are accepted when the host matches the current host
+     *     (the SSO portal may send the user straight to
+     *     https://glpi.example.org/ServiceCatalog) or when they only differ by
+     *     scheme (http <-> https, common behind reverse proxies); other hosts
+     *     are refused (open redirect protection);
+     *   - scheme-relative URLs ("//host/...") and control characters
+     *     (header injection attempts) are refused;
+     *   - a query string is preserved, a fragment is dropped.
      *
-     * @return string A safe relative redirect usable after the callback.
+     * @return string A safe redirect target usable after the callback.
      */
-    private static function sanitizeRedirect(string $redirect): string
+    public static function sanitizeRedirect(string $redirect): string
     {
         $redirect = trim($redirect);
 
-        // Refuse anything that is not a plain local path (no scheme, no host,
-        // no control characters).
-        $unsafe = $redirect === ''
-            || preg_match('/[\x00-\x1F\x7F]/', $redirect) === 1
-            || preg_match('#^[a-zA-Z][a-zA-Z0-9+.-]*:#', $redirect) === 1
-            || str_contains($redirect, '//');
-
-        if ($unsafe) {
-            return '/front/central.php';
+        // Refuse control characters / CR-LF (header injection attempts).
+        if ($redirect === '' || preg_match('/[\x00-\x1F\x7F]/', $redirect) === 1) {
+            return '';
         }
 
         // Drop the fragment, keep an eventual query string (e.g. /Helpdesk?x=1).
@@ -145,11 +148,141 @@ final class SsoClient
         if ($fragment_pos !== false) {
             $redirect = substr($redirect, 0, $fragment_pos);
         }
-        $redirect = '/' . ltrim($redirect, '/');
 
-        // Route through GLPI's post-login controller: after Session::init(),
-        // /front/central.php forwards to the requested page once authenticated.
-        return '/front/central.php?redirect=' . rawurlencode($redirect);
+        // Scheme-relative URL ("//host/path"): keep only the path part.
+        if (str_starts_with($redirect, '//')) {
+            $path = parse_url($redirect, PHP_URL_PATH);
+            return is_string($path) && $path !== '' ? $path : '';
+        }
+
+        // Absolute URL: accept it when it points to this GLPI host.
+        if (preg_match('#^[a-zA-Z][a-zA-Z0-9+.-]*://#', $redirect) === 1) {
+            $parsed = parse_url($redirect);
+            $host   = $parsed['host'] ?? '';
+            if ($host === '' || $host !== self::currentHost()) {
+                return '';
+            }
+            $path = $parsed['path'] ?? '/';
+            if (isset($parsed['query']) && $parsed['query'] !== '') {
+                $path .= '?' . $parsed['query'];
+            }
+            return $path !== '' ? $path : '/';
+        }
+
+        // Plain local path (may start with or without a slash).
+        return '/' . ltrim($redirect, '/');
+    }
+
+    /**
+     * Absolute URL pointing to front/callback.php (or the configured
+     * SSO_CALLBACK_URI).
+     */
+    public static function buildCallbackUri(): string
+    {
+        $configured = Config::callbackUri();
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+        $scheme = $https ? 'https' : 'http';
+        $host   = self::currentHost();
+
+        // This script lives in .../plugins/ssobridge/front/, callback.php is a sibling.
+        $script_dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+
+        return $scheme . '://' . $host . $script_dir . '/callback.php';
+    }
+
+    /**
+     * Process a pending SSO login when the browser landed on any other GLPI
+     * page instead of front/callback.php (e.g. because the callback URL
+     * configured on the portal points to /ServiceCatalog or /Helpdesk).
+     *
+     * When the current request is that other page AND a correlation id is
+     * waiting in the session, the identity is exchanged, the GLPI session is
+     * opened and the user is sent to the requested page. This makes the login
+     * work at 100% even when the callback URL is a full GLPI page URL.
+     *
+     * @return bool True when a pending login was processed (the caller must
+     *              stop: a redirect is always thrown on success, an error
+     *              page is displayed on failure).
+     */
+    public static function processPendingLogin(): bool
+    {
+        $correlationId = (string) ($_SESSION[self::SESSION_KEY] ?? '');
+        if ($correlationId === '') {
+            return false;
+        }
+
+        // The callback script is the normal path and handles its own flow.
+        if (self::isCallbackRequest()) {
+            return false;
+        }
+
+        // Never hijack a POST / AJAX / file request that happens to arrive on
+        // the page while a login is pending: let it run normally so nothing is
+        // consumed or broken; the GET navigation will complete the login.
+        $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        $is_ajax = (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest')
+            || str_contains((string) ($_SERVER['HTTP_ACCEPT'] ?? ''), 'application/json');
+        if ($method !== 'GET' || $is_ajax) {
+            return false;
+        }
+
+        unset($_SESSION[self::SESSION_KEY]);
+        $redirect = (string) ($_SESSION[self::REDIRECT_KEY] ?? '');
+        unset($_SESSION[self::REDIRECT_KEY]);
+
+        $identity = self::retrieveLoginInfo($correlationId);
+        if ($identity['error'] !== '') {
+            // Put the correlation id back so a simple page refresh retries the
+            // validation (covers a race where the portal redirected the browser
+            // before registering the validated identity).
+            $_SESSION[self::SESSION_KEY] = $correlationId;
+            if ($redirect !== '') {
+                $_SESSION[self::REDIRECT_KEY] = $redirect;
+            }
+            Front::renderMessage('SSO validation failed', [$identity['error']], 401);
+            return true;
+        }
+
+        $errors = GlpiLoginService::login($identity['email'], $identity['username'], $redirect);
+        if (count($errors) > 0) {
+            Front::renderMessage('SSO login failed', $errors, 403);
+        }
+        return true;
+    }
+
+    /**
+     * Is the current request the plugin callback script itself?
+     */
+    private static function isCallbackRequest(): bool
+    {
+        $script = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+        if (str_ends_with($script, '/plugins/ssobridge/front/callback.php')) {
+            return true;
+        }
+
+        $path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH) ?: '';
+        return str_ends_with($path, '/plugins/ssobridge/front/callback.php');
+    }
+
+    /**
+     * Host of the current request (fallback on the GLPI configured URL).
+     */
+    private static function currentHost(): string
+    {
+        global $CFG_GLPI;
+
+        $host = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? '');
+        if ($host !== '') {
+            return strtolower((string) preg_replace('/:\d+$/', '', $host));
+        }
+
+        $url_base = parse_url((string) ($CFG_GLPI['url_base'] ?? ''), PHP_URL_HOST);
+        return is_string($url_base) ? strtolower($url_base) : '';
     }
 
     /**
@@ -182,28 +315,6 @@ final class SsoClient
         }
 
         return $correlationId;
-    }
-
-    /**
-     * Callback URI used in the SSO redirect.
-     * Either the configured SSO_CALLBACK_URI or a value built from the request.
-     */
-    private static function buildCallbackUri(): string
-    {
-        $configured = Config::callbackUri();
-        if ($configured !== '') {
-            return $configured;
-        }
-
-        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-            || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
-        $scheme = $https ? 'https' : 'http';
-        $host   = $_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? 'localhost');
-
-        // This script lives in .../plugins/ssobridge/front/, callback.php is a sibling.
-        $script_dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-
-        return $scheme . '://' . $host . $script_dir . '/callback.php';
     }
 
     /**

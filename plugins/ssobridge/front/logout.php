@@ -8,6 +8,9 @@
  * Destroys the local GLPI session, then invalidates the SSO session on the
  * portal (the portal redirects the browser back to GLPI afterwards).
  *
+ * An optional ?redirect=<GLPI target> is forwarded to the portal logout URL
+ * when it points to this GLPI instance (local path or same-host absolute URL).
+ *
  * ---------------------------------------------------------------------
  */
 
@@ -42,5 +45,17 @@ if ($base_url === '') {
 // Destroy the GLPI session (like front/logout.php).
 Session::cleanOnLogout();
 
+$sso_logout_url = SsoClient::ssoLogoutUrl($base_url);
+
+// Forward a safe redirect target to the portal logout endpoint.
+$redirect = $_GET['redirect'] ?? ($_POST['redirect'] ?? '');
+if (is_string($redirect) && $redirect !== '') {
+    $safe = SsoClient::sanitizeRedirect($redirect);
+    if ($safe !== '') {
+        $sep = (strpos($sso_logout_url, '?') === false) ? '?' : '&';
+        $sso_logout_url .= $sep . 'redirect=' . rawurlencode($safe);
+    }
+}
+
 // Invalidate the SSO session too.
-Html::redirect(SsoClient::ssoLogoutUrl($base_url));
+Html::redirect($sso_logout_url);

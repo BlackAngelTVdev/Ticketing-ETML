@@ -141,11 +141,26 @@ created by the CLI install.
   `allow_url_fopen`) must be enabled — both are standard in GLPI 11.
 * **Plugin not shown in Setup ▸ Plugins**: check the folder name is exactly
   `ssobridge` (lowercase, no hyphen) in `glpi/plugins/`.
-* **"Your session has expired. Please log in again." in a loop right after
-  the portal login**: the browser never reaches `front/callback.php`, so the
-  GLPI session is never opened. This happens when the callback URL configured
-  on the portal (or `SSO_CALLBACK_URI`) points to a GLPI page such as
-  `http://<ip>/Helpdesk` instead of
-  `http://<ip>/plugins/ssobridge/front/callback.php`. The plugin now also
-  rewrites any absolute URL passed as `?redirect=` to a safe local target
-  (`/front/central.php`), which stops the loop.
+* **"Your session has expired. Please log in again." right after the portal
+  login**: the browser lands on a GLPI page while still anonymous, so the GLPI
+  session was never opened. Since the plugin now intercepts any GLPI page
+  carrying a pending correlation id (see "Callback URL" below), this should no
+  longer happen; if it does, check that cookies work (same domain between the
+  portal and GLPI, no `session.cookie_secure` on plain HTTP) and that
+  `SSO_CALLBACK_URI`, when set, points to
+  `https://<host>/plugins/ssobridge/front/callback.php`.
+
+## Callback URL
+
+The `redirectUri` (callback URL) given to the portal can be either:
+
+* the plugin callback: `https://<host>/plugins/ssobridge/front/callback.php`
+  (recommended, set it explicitly with `SSO_CALLBACK_URI` if needed); **or**
+* any GLPI page URL on the same host, e.g. `https://domaine.ex/ServiceCatalog`
+  or `https://<host>/Helpdesk`. The plugin detects the pending login on that
+  page, opens the GLPI session right there and leaves the user on it — no
+  "session expired" loop.
+
+Redirect targets passed as `?redirect=` (or stored for the round-trip) accept
+local paths (`/ServiceCatalog`, `/Helpdesk?x=1`) and same-host absolute URLs;
+external hosts are refused (open redirect protection).

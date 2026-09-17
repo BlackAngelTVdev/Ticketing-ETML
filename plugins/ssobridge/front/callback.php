@@ -9,6 +9,11 @@
  * The correlation id stored at login time is exchanged against the validated
  * identity (email + username), then the user is logged into GLPI.
  *
+ * The pending redirect (e.g. /ServiceCatalog) is read from the session: it
+ * may have been stored by front/login.php (?redirect=...) or by
+ * SsoClient::processPendingLogin() when the portal sent the browser to the
+ * final page instead of this callback.
+ *
  * ---------------------------------------------------------------------
  */
 
@@ -19,6 +24,10 @@ use GlpiPlugin\Ssobridge\SsoClient;
 // Correlation id set by front/login.php before the redirect to the portal.
 $correlationId = $_SESSION[SsoClient::SESSION_KEY] ?? '';
 unset($_SESSION[SsoClient::SESSION_KEY]);
+
+// Redirect target requested for this login (local path).
+$redirect = $_SESSION[SsoClient::REDIRECT_KEY] ?? '';
+unset($_SESSION[SsoClient::REDIRECT_KEY]);
 
 if ($correlationId === '') {
     Front::renderMessage(
@@ -40,7 +49,7 @@ if ($identity['error'] !== '') {
     return;
 }
 
-$errors = GlpiLoginService::login($identity['email'], $identity['username']);
+$errors = GlpiLoginService::login($identity['email'], $identity['username'], is_string($redirect) ? $redirect : null);
 if (count($errors) > 0) {
     Front::renderMessage('SSO login failed', $errors, 403);
 }

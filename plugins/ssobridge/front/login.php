@@ -9,11 +9,12 @@
  * the browser to the SSO portal. The portal sends the user back to the
  * callback page afterwards.
  *
- * Optional query parameter: ?redirect=/front/central.php. Only local relative
- * paths are accepted: SsoClient::sanitizeRedirect() rewrites anything else
- * (absolute URLs like http://ip/Helpdesk, "//host/...", etc.) to a safe local
- * target, so the browser always goes through front/callback.php first —
- * otherwise the session can never be opened and the login loops forever.
+ * Optional query parameter: ?redirect=<GLPI target>. Both local paths
+ * (/ServiceCatalog, /front/central.php, /Helpdesk?x=1) and absolute URLs on
+ * the same host are accepted: SsoClient::sanitizeRedirect() only refuses
+ * external hosts (open redirect protection) and control characters. Even a
+ * full page URL such as https://glpi.example.org/ServiceCatalog works: the
+ * plugin completes the login on that page itself (Boot::onRequest()).
  *
  * ---------------------------------------------------------------------
  */
@@ -22,8 +23,15 @@ use GlpiPlugin\Ssobridge\Config;
 use GlpiPlugin\Ssobridge\Front;
 use GlpiPlugin\Ssobridge\SsoClient;
 
-// Already authenticated? Nothing to do, send the user home.
+// Already authenticated? Nothing to do, send the user to the requested page.
 if (Session::getLoginUserID()) {
+    $redirect = $_GET['redirect'] ?? '';
+    if (is_string($redirect) && $redirect !== '') {
+        $safe = SsoClient::sanitizeRedirect($redirect);
+        if ($safe !== '') {
+            Toolbox::manageRedirect($safe);
+        }
+    }
     Auth::redirectIfAuthenticated();
 }
 
