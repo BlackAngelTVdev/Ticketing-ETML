@@ -34,10 +34,15 @@
 
 {% block content_block %}
     {# Plugin hooks (e.g. SSO login buttons) are displayed above the login form #}
-    <div class="text-center mb-4">
+    <div class="text-center mb-4" id="sso_login_area">
         {{ call_plugin_hook(constant('Glpi\\Plugin\\Hooks::DISPLAY_LOGIN')) }}
     </div>
-    <form action="{{ path('front/login.php') }}" method="post" autocomplete="off" data-submit-once>
+    <div class="text-center mb-4" id="legacy_login_area">
+        <button type="button" class="btn btn-outline-secondary btn-lg w-100" id="show_legacy_login">
+            <i class="ti ti-mail" aria-hidden="true"></i>&nbsp;Connexion classique (email / mot de passe)
+        </button>
+    </div>
+    <form action="{{ path('front/login.php') }}" method="post" autocomplete="off" data-submit-once class="d-none" id="legacy_login_form">
         <input type="hidden" name="noAUTO" value="{{ noAuto }}"/>
         <input type="hidden" name="redirect" value="{{ redirect }}"/>
         <input type="hidden" name="_glpi_csrf_token" value="{{ csrf_token() }}"/>
@@ -84,6 +89,9 @@
                     <button type="submit" name="submit" class="btn btn-primary w-100 mb-2">
                         {{ __('Sign in') }}
                     </button>
+                    <div class="text-center mb-2">
+                        <a href="#" id="back_to_login_choice">&laquo; Retour</a>
+                    </div>
                     {% if show_lost_password %}
                         <div class="ms-auto text-center forgot_password {{ config('display_login_source') ? 'd-none' : '' }}">
                             <a href="{{ path('front/lostpassword.php?lostpassword=1') }}">
@@ -133,7 +141,33 @@
 {% block javascript_block %}
     <script type="text/javascript">
         $(function () {
+            // After a failed legacy login the page re-renders: reopen the legacy
+            // form instead of the two-button choice (anchors keep ids unique).
+            if (location.hash === '#legacy') {
+                $('#sso_login_area').addClass('d-none');
+                $('#legacy_login_area').addClass('d-none');
+                $('#legacy_login_form').removeClass('d-none');
+            }
+
             $('#login_name').focus();
+
+            // Show the legacy email/password form when the "legacy" button is clicked.
+            $('#show_legacy_login').on('click', () => {
+                location.hash = 'legacy';
+                $('#sso_login_area').addClass('d-none');
+                $('#legacy_login_area').addClass('d-none');
+                $('#legacy_login_form').removeClass('d-none');
+                $('#login_name').trigger('focus');
+            });
+
+            // Back to the two-button choice.
+            $('#back_to_login_choice').on('click', (e) => {
+                e.preventDefault();
+                history.replaceState(null, '', location.pathname + location.search);
+                $('#legacy_login_form').addClass('d-none');
+                $('#sso_login_area').removeClass('d-none');
+                $('#legacy_login_area').removeClass('d-none');
+            });
         });
     </script>
 {% endblock %}

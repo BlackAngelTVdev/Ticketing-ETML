@@ -19,7 +19,9 @@ with GLPI:
 
 ## Flow
 
-1. The GLPI login page shows a **Login with SSO** button (plugin hook). When
+1. The GLPI login page shows two buttons: **Connexion Eduvaud** (SSO) and
+   **Connexion classique** (legacy email / password form, shown after a click
+   on the button). When
    `SSO_AUTO_REDIRECT` is enabled, the login page is skipped altogether and
    anonymous visitors are redirected straight to the SSO portal (append
    `?nosso=1` to any GLPI URL to keep the regular login form).
@@ -49,7 +51,8 @@ with GLPI:
      php bin/console plugin:install ssobridge
      php bin/console plugin:activate ssobridge
      ```
-4. Open the GLPI login page: the **Login with SSO** button is displayed.
+4. Open the GLPI login page: the **Connexion Eduvaud** (SSO) and
+   **Connexion classique** buttons are displayed.
 
 > The plugin is served by GLPI at
 > `/plugins/ssobridge/front/login.php` (start) and
@@ -67,7 +70,7 @@ with GLPI:
 | `SSO_DEFAULT_PROFILE`  | Profile for auto-created users: empty = GLPI default profile, `none` = no profile,   |
 |                        | or a profile name (e.g. `Self-Service`).                                             |
 | `SSO_AUTO_REDIRECT`    | `1` to redirect anonymous visitors of the login page straight to the SSO portal  |
-|                        | (default `0` = show the login form with the **Login with SSO** button). With   |
+|                        | (default `0` = show the two login buttons). With   |
 |                        | auto-redirect on, append `?nosso=1` to any GLPI URL to reach the login form.   |
 
 Real environment variables take precedence over the `.env` file.

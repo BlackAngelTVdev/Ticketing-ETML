@@ -127,7 +127,7 @@ function plugin_ssobridge_display_login(): void
         echo '<noscript>' . "\n";
         echo '    <div class="text-center">' . "\n";
         echo '        <a class="btn btn-outline-secondary" href="' . htmlescape($url) . '">' . "\n";
-        echo '            &nbsp;Login with SSO' . "\n";
+        echo '            &nbsp;Connexion Eduvaud' . "\n";
         echo '        </a>' . "\n";
         echo '    </div>' . "\n";
         echo '</noscript>' . "\n";
@@ -141,7 +141,7 @@ function plugin_ssobridge_display_login(): void
     echo '<div class="w-100">' . "\n";
     echo '    <a class="btn btn-primary btn-lg w-100" href="' . htmlescape($url) . '">' . "\n";
     echo '        <i class="ti ti-user-shield" aria-hidden="true"></i>' . "\n";
-    echo '        &nbsp;Login with SSO' . "\n";
+    echo '        &nbsp;Connexion Eduvaud' . "\n";
     echo '    </a>' . "\n";
     echo '</div>' . "\n";
 }
