@@ -9,8 +9,11 @@
  * the browser to the SSO portal. The portal sends the user back to the
  * callback page afterwards.
  *
- * Optional query parameter: ?redirect=/front/central.php (validated by GLPI
- * before the final redirect, so open redirection is not possible).
+ * Optional query parameter: ?redirect=/front/central.php. Only local relative
+ * paths are accepted: SsoClient::sanitizeRedirect() rewrites anything else
+ * (absolute URLs like http://ip/Helpdesk, "//host/...", etc.) to a safe local
+ * target, so the browser always goes through front/callback.php first —
+ * otherwise the session can never be opened and the login loops forever.
  *
  * ---------------------------------------------------------------------
  */

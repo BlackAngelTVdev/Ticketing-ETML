@@ -38,6 +38,9 @@ final class SsoClient
      * to the portal. Never returns on success (redirect is thrown).
      *
      * @param string|null $redirect Optional GLPI relative URL to come back to after login.
+     *                              Only local paths are accepted: absolute URLs
+     *                              (http://host/...) would bypass the callback
+     *                              entirely and cause a "session expired" loop.
      */
     public static function startLogin(?string $redirect = null): void
     {
@@ -46,7 +49,7 @@ final class SsoClient
         $callback_uri = self::buildCallbackUri();
         if ($redirect !== null && $redirect !== '') {
             $sep = (strpos($callback_uri, '?') === false) ? '?' : '&';
-            $callback_uri .= $sep . 'redirect=' . rawurlencode($redirect);
+            $callback_uri .= $sep . 'redirect=' . rawurlencode(self::sanitizeRedirect($redirect));
         }
 
         $sso_url = Config::portalUrl() . 'redirect'
@@ -107,6 +110,46 @@ final class SsoClient
     public static function ssoLogoutUrl(string $redirectUri): string
     {
         return Config::portalUrl() . 'bridge/logout?redirectUri=' . rawurlencode($redirectUri);
+    }
+
+    /**
+     * Sanitize the "redirect" parameter so the browser always comes back to
+     * the plugin callback first (the only place where the GLPI session can be
+     * opened). Only local relative paths are allowed:
+     *
+     *   - absolute URLs (http://ip/Helpdesk), scheme-relative (//host/...)
+     *     and URLs with a host are refused -> fall back to /front/central.php;
+     *   - a query string is preserved inside the final redirect (forwarded
+     *     through /front/central.php?redirect=...), a fragment is dropped;
+     *   - control characters / CR-LF (header injection attempts) are refused.
+     *
+     * @return string A safe relative redirect usable after the callback.
+     */
+    private static function sanitizeRedirect(string $redirect): string
+    {
+        $redirect = trim($redirect);
+
+        // Refuse anything that is not a plain local path (no scheme, no host,
+        // no control characters).
+        $unsafe = $redirect === ''
+            || preg_match('/[\x00-\x1F\x7F]/', $redirect) === 1
+            || preg_match('#^[a-zA-Z][a-zA-Z0-9+.-]*:#', $redirect) === 1
+            || str_contains($redirect, '//');
+
+        if ($unsafe) {
+            return '/front/central.php';
+        }
+
+        // Drop the fragment, keep an eventual query string (e.g. /Helpdesk?x=1).
+        $fragment_pos = strpos($redirect, '#');
+        if ($fragment_pos !== false) {
+            $redirect = substr($redirect, 0, $fragment_pos);
+        }
+        $redirect = '/' . ltrim($redirect, '/');
+
+        // Route through GLPI's post-login controller: after Session::init(),
+        // /front/central.php forwards to the requested page once authenticated.
+        return '/front/central.php?redirect=' . rawurlencode($redirect);
     }
 
     /**

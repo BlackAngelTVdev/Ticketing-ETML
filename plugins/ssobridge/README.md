@@ -1,4 +1,4 @@
-# GLPI SSO Bridge
+freebu# GLPI SSO Bridge
 
 A GLPI plugin that bridges an external SSO portal (e.g. `apps.pm2etml.ch/auth`)
 to GLPI. Once a user is authenticated on the SSO portal, the plugin finds the
@@ -141,3 +141,11 @@ created by the CLI install.
   `allow_url_fopen`) must be enabled — both are standard in GLPI 11.
 * **Plugin not shown in Setup ▸ Plugins**: check the folder name is exactly
   `ssobridge` (lowercase, no hyphen) in `glpi/plugins/`.
+* **"Your session has expired. Please log in again." in a loop right after
+  the portal login**: the browser never reaches `front/callback.php`, so the
+  GLPI session is never opened. This happens when the callback URL configured
+  on the portal (or `SSO_CALLBACK_URI`) points to a GLPI page such as
+  `http://<ip>/Helpdesk` instead of
+  `http://<ip>/plugins/ssobridge/front/callback.php`. The plugin now also
+  rewrites any absolute URL passed as `?redirect=` to a safe local target
+  (`/front/central.php`), which stops the loop.
