@@ -160,6 +160,12 @@ is written there with the whole context of the request.
   served by this GLPI instance (a 404 page or another application in front of
   GLPI cannot be intercepted), and look for the corresponding entry in the
   journal.
+* **`500` error page (or `Uncaught Glpi\Exception\RedirectException`)
+  right after the portal login**: a redirect was thrown from a hook running
+  during the kernel boot (plugin init / boot hook), where GLPI cannot turn it
+  into a response. Redirects issued that early must be sent with
+  `SsoClient::sendRedirect()`; the journal tells which target was being
+  redirected to just before the error.
 * **Plugin not shown in Setup ▸ Plugins**: check the folder name is exactly
   `ssobridge` (lowercase, no hyphen) in `glpi/plugins/`.
 
@@ -183,6 +189,14 @@ so **before** GLPI checks the session. A pending login is completed right on
 the page the portal sent the browser to, and the user is sent back to that
 very page once logged in — no `Your session has expired. Please log in again.`
 page.
+
+That hook runs while the kernel boots, i.e. **before** GLPI handles the
+request. At that moment GLPI's exception listener — the one that turns the
+`RedirectException` raised by `Html::redirect()` into a response — is not
+active yet: letting it escape would end on a `500` error page and the browser
+would never reach the page the login was completed for. The plugin therefore
+sends those redirects itself (`SsoClient::sendRedirect()`); use it too if you
+ever add a redirect to a hook that runs this early.
 
 If the PHP session was lost between the portal and GLPI (cookies dropped,
 session garbage collected, browser restarted, ...), the plugin recognises the

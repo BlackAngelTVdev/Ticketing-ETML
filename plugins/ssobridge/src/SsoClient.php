@@ -30,6 +30,7 @@
 
 namespace GlpiPlugin\Ssobridge;
 
+use Glpi\Http\RedirectResponse;
 use Html;
 use RuntimeException;
 use Session;
@@ -382,6 +383,43 @@ final class SsoClient
 
         Logger::debug('Redirecting the browser', ['target' => $path]);
         Html::redirect($path);
+    }
+
+    /**
+     * Send a redirect while the plugin runs in the kernel boot phase.
+     *
+     * SsoClient::processPendingLogin() is called by the plugin init hook, i.e.
+     * during the kernel boot (InitializePlugins listener), before any request
+     * is handled. GLPI's exception listener, the one that turns the
+     * RedirectException raised by Html::redirect() into an actual response,
+     * only runs for exceptions thrown while a request is being handled: letting
+     * that exception escape the boot phase ends on a "500 Internal Server
+     * Error" page, and the browser is never sent to the page the login was
+     * completed for. The response is therefore sent here, directly, exactly
+     * like other GLPI plugins that redirect from their boot hook.
+     */
+    public static function sendRedirect(RedirectResponse $response): never
+    {
+        if (!headers_sent()) {
+            Logger::debug('Sending the redirect from the boot phase', [
+                'target' => (string) $response->headers->get('Location', ''),
+            ]);
+            $response->send();
+            exit; // @phpstan-ignore glpi.forbidExit (the kernel already booted: no response will be built)
+        }
+
+        // Headers are already gone (somebody echoed something before us): fall
+        // back on a client side redirect so the browser still reaches the page.
+        $target = (string) $response->headers->get('Location', '');
+
+        Logger::warning('Redirecting the browser after the headers were sent', ['target' => $target]);
+
+        echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+            . '<meta http-equiv="refresh" content="0; url=' . htmlescape($target) . '">'
+            . '</head><body><a href="' . htmlescape($target) . '">'
+            . htmlescape('Continue') . '</a></body></html>';
+
+        exit; // @phpstan-ignore glpi.forbidExit (the kernel already booted: no response will be built)
     }
 
     /**
