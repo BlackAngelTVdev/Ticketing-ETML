@@ -42,6 +42,11 @@ final class Config
         // SSO portal (1) instead of only showing the "Login with SSO" button (0).
         // Append ?nosso=1 to any GLPI URL to keep the regular login form.
         'SSO_AUTO_REDIRECT'    => '0',
+        // Verbosity of the SSO journal (files/_log/ssobridge.log):
+        //   error | warning | info | debug | none
+        'SSO_LOG_LEVEL'        => 'info',
+        // Also send every logged entry to PHP's error_log() (1 = yes).
+        'SSO_LOG_TO_ERROR_LOG' => '0',
     ];
 
     /** @var array<string, string>|null */
@@ -99,6 +104,22 @@ final class Config
     public static function autoRedirect(): bool
     {
         return filter_var(self::get('SSO_AUTO_REDIRECT'), FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /**
+     * Verbosity of the SSO journal: error, warning, info, debug or none.
+     */
+    public static function logLevel(): string
+    {
+        return strtolower(trim(self::get('SSO_LOG_LEVEL')));
+    }
+
+    /**
+     * Also forward every journal entry to PHP's error_log().
+     */
+    public static function logToErrorLog(): bool
+    {
+        return filter_var(self::get('SSO_LOG_TO_ERROR_LOG'), FILTER_VALIDATE_BOOLEAN);
     }
 
     /**

@@ -14,6 +14,7 @@
  * ---------------------------------------------------------------------
  */
 
+use GlpiPlugin\Ssobridge\Logger;
 use GlpiPlugin\Ssobridge\SsoClient;
 
 global $CFG_GLPI;
@@ -42,8 +43,13 @@ if ($base_url === '') {
     $base_url = $scheme . '://' . $host;
 }
 
+// Drop any SSO login in flight: logging out wins over a pending login.
+SsoClient::resetFlow();
+
 // Destroy the GLPI session (like front/logout.php).
 Session::cleanOnLogout();
+
+Logger::info('SSO logout requested', ['redirect_uri' => $base_url]);
 
 $sso_logout_url = SsoClient::ssoLogoutUrl($base_url);
 
@@ -52,8 +58,11 @@ $redirect = $_GET['redirect'] ?? ($_POST['redirect'] ?? '');
 if (is_string($redirect) && $redirect !== '') {
     $safe = SsoClient::sanitizeRedirect($redirect);
     if ($safe !== '') {
+        Logger::debug('Forwarding the redirect target to the portal logout', ['redirect' => $safe]);
         $sep = (strpos($sso_logout_url, '?') === false) ? '?' : '&';
         $sso_logout_url .= $sep . 'redirect=' . rawurlencode($safe);
+    } else {
+        Logger::warning('Refused an unsafe redirect target on logout', ['redirect' => $redirect]);
     }
 }
 

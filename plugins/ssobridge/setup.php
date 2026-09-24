@@ -19,6 +19,7 @@
 use Glpi\Http\Firewall;
 use Glpi\Plugin\Hooks;
 use GlpiPlugin\Ssobridge\Config;
+use GlpiPlugin\Ssobridge\Logger;
 use GlpiPlugin\Ssobridge\SsoClient;
 
 /**
@@ -82,9 +83,14 @@ function plugin_init_ssobridge(): void
     // Display an "SSO login" button on the GLPI login page.
     $PLUGIN_HOOKS[Hooks::DISPLAY_LOGIN]['ssobridge'] = 'plugin_ssobridge_display_login';
 
-    // Complete an SSO login when the browser lands on any other GLPI page
-    // than front/callback.php with a pending correlation id (the portal
-    // callback URL may point to /ServiceCatalog, /Helpdesk, ...).
+    Logger::debug('SSO Bridge plugin initialised', ['script' => $_SERVER['SCRIPT_NAME'] ?? '']);
+
+    // Take over the request when the browser comes back from the SSO portal,
+    // whatever the callback URL configured on the portal is (this plugin
+    // callback, /ServiceCatalog, /Helpdesk, the GLPI home page, ...). See
+    // SsoClient::processPendingLogin(): it either completes the login, or
+    // restarts the SSO round-trip when the PHP session was lost on the way
+    // back, so the user never ends on the "session expired" page.
     SsoClient::processPendingLogin();
 }
 
@@ -124,8 +130,27 @@ function plugin_ssobridge_display_login(): void
     $configured = Config::accessToken() !== '';
     $redirect   = $_GET['redirect'] ?? '';
 
+    // Error left by the plugin init hook (failed validation, lost session,
+    // ...). It is displayed instead of bouncing again to the portal, so the
+    // user can read what happened (and quote the reference) before retrying.
+    $error = SsoClient::consumePendingError();
+    if ($error !== null) {
+        echo '<div class="alert alert-danger text-start" role="alert">' . "\n";
+        echo '    <h4 class="alert-title">' . htmlescape($error['title']) . '</h4>' . "\n";
+        echo '    <ul class="mb-2">' . "\n";
+        foreach ($error['messages'] as $message) {
+            echo '        <li>' . htmlescape($message) . '</li>' . "\n";
+        }
+        echo '    </ul>' . "\n";
+        echo '    <div class="small">' . htmlescape('Référence') . ' : <code>'
+            . htmlescape((string) $error['ref']) . '</code><br>' . htmlescape('Journal SSO') . ' : <code>'
+            . htmlescape(Logger::location()) . '</code></div>' . "\n";
+        echo '</div>' . "\n";
+    }
+
     if (
         $configured
+        && $error === null
         && Config::autoRedirect()
         && !Session::getLoginUserID()
         && !isset($_GET['nosso'])

@@ -65,13 +65,16 @@ with GLPI:
 | ---------------------- | ------------------------------------------------------------------------------------ |
 | `SSO_PORTAL_URL`       | Base URL of the SSO portal (default `https://apps.pm2etml.ch/auth/`).                |
 | `SSO_ACCESS_TOKEN`     | **Access token (API key)** given by the SSO portal maintainer. Required.             |
-| `SSO_CALLBACK_URI`     | Callback URL/URI used in the SSO redirect. Leave empty to auto-build it.             |
+| `SSO_CALLBACK_URI`     | Callback URL/URI used in the SSO redirect. Any GLPI URL works (the plugin callback,
+|                        | `/ServiceCatalog`, `/Helpdesk`, a local path, ...). Leave empty to auto-build it.    |
 | `SSO_AUTO_CREATE_USERS`| `1` to create the GLPI user when the SSO account has no match (default `1`).          |
 | `SSO_DEFAULT_PROFILE`  | Profile for auto-created users: empty = GLPI default profile, `none` = no profile,   |
 |                        | or a profile name (e.g. `Self-Service`).                                             |
 | `SSO_AUTO_REDIRECT`    | `1` to redirect anonymous visitors of the login page straight to the SSO portal  |
 |                        | (default `0` = show the two login buttons). With   |
 |                        | auto-redirect on, append `?nosso=1` to any GLPI URL to reach the login form.   |
+| `SSO_LOG_LEVEL`        | Verbosity of the SSO journal: `debug`, `info` (default), `warning`, `error`, `none`. |
+| `SSO_LOG_TO_ERROR_LOG` | `1` to also forward every journal entry to PHP's `error_log()`.                      |
 
 Real environment variables take precedence over the `.env` file.
 
@@ -83,6 +86,7 @@ SSO_ACCESS_TOKEN=my-access-token
 SSO_CALLBACK_URI=https://glpi.example.org/plugins/ssobridge/front/callback.php
 SSO_AUTO_CREATE_USERS=1
 SSO_DEFAULT_PROFILE=Self-Service
+SSO_LOG_LEVEL=info
 ```
 
 ## User matching
@@ -132,35 +136,88 @@ created by the CLI install.
 
 ## Troubleshooting
 
+Start with the journal: `files/_log/ssobridge.log`, or the viewer at
+`/plugins/ssobridge/front/logs.php` (administrators only). Every message below
+is written there with the whole context of the request.
+
 * **"SSO Bridge is not configured"**: set `SSO_ACCESS_TOKEN` in `.env` or in
   the environment.
-* **"No pending SSO login was found"**: the PHP session was lost between the
-  login page and the callback (cookie issue, session save path, or the portal
-  did not preserve cookies).
-* **"Cannot reach the SSO portal"**: network/DNS issue; PHP `curl` (or
-  `allow_url_fopen`) must be enabled — both are standard in GLPI 11.
+* **"SSO validation failed" / "Cannot reach the SSO portal"**: network/DNS
+  issue or wrong token; PHP `curl` (or `allow_url_fopen`) must be enabled —
+  both are standard in GLPI 11. The journal contains the portal URL and the
+  portal answer.
+* **"SSO login could not be completed" (lost round-trip)**: the plugin found
+  itself on a page coming back from the portal but had no login attempt left
+  to complete, twice in a row. Check that the browser keeps cookies for the
+  GLPI host, that the callback URL points to *this* GLPI instance (same host),
+  and that `session.cookie_secure` is not `1` when GLPI is served over plain
+  HTTP.
+* **"Your session has expired. Please log in again." right after the portal
+  login**: this message comes from GLPI and must not appear anymore — the
+  plugin intercepts the landing before GLPI checks the session and clears that
+  message when it takes over. If you still see it, the request never reached
+  the plugin init hook: check that the plugin is *enabled*, that the URL is
+  served by this GLPI instance (a 404 page or another application in front of
+  GLPI cannot be intercepted), and look for the corresponding entry in the
+  journal.
 * **Plugin not shown in Setup ▸ Plugins**: check the folder name is exactly
   `ssobridge` (lowercase, no hyphen) in `glpi/plugins/`.
-* **"Your session has expired. Please log in again." right after the portal
-  login**: the browser lands on a GLPI page while still anonymous, so the GLPI
-  session was never opened. Since the plugin now intercepts any GLPI page
-  carrying a pending correlation id (see "Callback URL" below), this should no
-  longer happen; if it does, check that cookies work (same domain between the
-  portal and GLPI, no `session.cookie_secure` on plain HTTP) and that
-  `SSO_CALLBACK_URI`, when set, points to
-  `https://<host>/plugins/ssobridge/front/callback.php`.
 
 ## Callback URL
 
-The `redirectUri` (callback URL) given to the portal can be either:
+**Whatever callback URL you configure, on the plugin side or on the portal
+side, the login completes and the browser lands back on it.** Accepted forms:
 
 * the plugin callback: `https://<host>/plugins/ssobridge/front/callback.php`
-  (recommended, set it explicitly with `SSO_CALLBACK_URI` if needed); **or**
-* any GLPI page URL on the same host, e.g. `https://domaine.ex/ServiceCatalog`
-  or `https://<host>/Helpdesk`. The plugin detects the pending login on that
-  page, opens the GLPI session right there and leaves the user on it — no
-  "session expired" loop.
+  (recommended, set it explicitly with `SSO_CALLBACK_URI` if needed);
+* any GLPI page, e.g. `https://domaine.ex/ServiceCatalog`,
+  `https://domaine.ex/ServiceCatalog/`, `https://<host>/Helpdesk`,
+  `https://<host>/glpi/front/central.php`, `https://<host>/`;
+* a local path (`/ServiceCatalog`) or a host without scheme
+  (`domaine.ex/ServiceCatalog`) in `SSO_CALLBACK_URI` — the missing parts are
+  filled in from the GLPI URL (`CFG_GLPI['url_base']` when set);
+* quotes or trailing spaces around the value in `.env` are ignored.
+
+How it works: the plugin intercepts the request during the plugin init hook,
+so **before** GLPI checks the session. A pending login is completed right on
+the page the portal sent the browser to, and the user is sent back to that
+very page once logged in — no `Your session has expired. Please log in again.`
+page.
+
+If the PHP session was lost between the portal and GLPI (cookies dropped,
+session garbage collected, browser restarted, ...), the plugin recognises the
+landing thanks to a short-lived `ssobridge_flow` cookie and a referer pointing
+to the portal, and simply **re-launches the SSO round-trip** instead of showing
+an error. Restarts are capped (2 per round-trip, plus a per-client rate limit)
+so a broken setup can never loop on itself.
 
 Redirect targets passed as `?redirect=` (or stored for the round-trip) accept
-local paths (`/ServiceCatalog`, `/Helpdesk?x=1`) and same-host absolute URLs;
-external hosts are refused (open redirect protection).
+local paths (`/ServiceCatalog`, `/Helpdesk?x=1`), same-host absolute URLs and
+host-only values; external hosts are refused (open redirect protection).
+
+## Journal (logs)
+
+Everything the plugin does during an SSO round-trip is written to a single
+human readable file:
+
+```
+files/_log/ssobridge.log        (rotated to ssobridge.log.1 above 1 MB)
+```
+
+```
+2026-09-24 12:00:03 [INFO    ] [SSO-4F3A9C1B] SSO login started | uri=/ServiceCatalog ip=10.0.0.5 callback_uri=https://domaine.ex/plugins/ssobridge/front/callback.php redirect=/ServiceCatalog correlation=9f2c1a7b…
+2026-09-24 12:00:09 [INFO    ] [SSO-4F3A9C1B] SSO identity validated | username=jdoe email=j***@domaine.ex uri=/ServiceCatalog ip=10.0.0.5
+2026-09-24 12:00:09 [INFO    ] [SSO-4F3A9C1B] GLPI session opened, returning to the requested page | users_id=42 redirect=/ServiceCatalog
+```
+
+* every entry starts with a short **reference** (`SSO-xxxxxxxx`) which is also
+  displayed on the plugin error pages and on the GLPI login page: ask the user
+  for it, then search it in the journal;
+* the access token and the correlation ids are **never** written in clear text;
+* verbosity is controlled by `SSO_LOG_LEVEL` (`debug` is very verbose and also
+  prints the last entries on the plugin error pages);
+* a web viewer is available to administrators:
+  `https://<host>/plugins/ssobridge/front/logs.php` (setup right required).
+  It shows the effective configuration (callback URL sent to the portal,
+  token set or not, ...), the last 400 entries, and can filter by level or by
+  text.

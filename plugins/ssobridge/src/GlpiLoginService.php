@@ -26,7 +26,6 @@ use Glpi\Security\TOTPManager;
 use Html;
 use Profile;
 use Session;
-use Toolbox;
 use User;
 
 final class GlpiLoginService
@@ -50,8 +49,15 @@ final class GlpiLoginService
         $username = trim($username);
 
         if ($email === '' && $username === '') {
+            Logger::error('The SSO portal did not provide any usable identity');
             return ['The SSO portal did not provide any usable identity (no email and no username).'];
         }
+
+        Logger::info('Opening a GLPI session for the SSO user', [
+            'username' => $username,
+            'email'    => $email,
+            'redirect' => (string) $redirect,
+        ]);
 
         // ------------------------------------------------------------------
         // 1. Find the GLPI user (email first, then username).
@@ -77,19 +83,31 @@ final class GlpiLoginService
 
         $userCreated = false;
         if ($userFound) {
+            Logger::info('Existing GLPI user matched', [
+                'glpi_user' => $user->fields['name'],
+                'users_id'  => (int) $user->fields['id'],
+            ]);
+
             if ((int) $user->fields['is_active'] !== 1) {
+                Logger::error('The matched GLPI account is deactivated', ['glpi_user' => $user->fields['name']]);
                 return [sprintf(
                     'The GLPI account "%s" is deactivated.',
                     $user->fields['name']
                 )];
             }
             if ((int) $user->fields['is_deleted'] === 1) {
+                Logger::error('The matched GLPI account is deleted', ['glpi_user' => $user->fields['name']]);
                 return [sprintf(
                     'The GLPI account "%s" is deleted.',
                     $user->fields['name']
                 )];
             }
         } else {
+            Logger::info('No GLPI user matches the SSO identity', [
+                'username' => $username,
+                'auto_create' => Config::autoCreateUsers(),
+            ]);
+
             if (!Config::autoCreateUsers()) {
                 return [
                     sprintf('No GLPI user matches "%s" and user auto-creation is disabled.', $username !== '' ? $username : $email),
@@ -98,9 +116,11 @@ final class GlpiLoginService
 
             $userId = self::createUser($email, $username);
             if ($userId === null || !$user->getFromDB($userId)) {
+                Logger::error('The GLPI user could not be created automatically', ['username' => $username]);
                 return ['The GLPI user could not be created automatically. Contact your administrator.'];
             }
             $userCreated = true;
+            Logger::info('GLPI user created from the SSO identity', ['users_id' => $userId, 'glpi_user' => $user->fields['name']]);
         }
 
         $usersId = (int) $user->fields['id'];
@@ -149,32 +169,48 @@ final class GlpiLoginService
             ];
 
             if ($totp->is2FAEnabled($usersId)) {
+                Logger::info('Second factor required, deferring to the GLPI MFA flow', ['users_id' => $usersId, 'step' => 'prompt']);
                 $_SESSION['mfa_pre_auth'] = $mfa_pre_auth;
                 Html::redirect(self::rootDoc() . '/MFA/Prompt');
             }
 
             if ($totp->get2FAEnforcement($usersId) !== TOTPManager::ENFORCEMENT_OPTIONAL) {
+                Logger::info('Second factor enrolment required, deferring to the GLPI MFA flow', ['users_id' => $usersId, 'step' => 'setup']);
                 $_SESSION['mfa_pre_auth'] = $mfa_pre_auth;
                 Html::redirect(self::rootDoc() . '/MFA/Setup');
             }
         }
+
+        Logger::debug('Initialising the GLPI session', ['users_id' => $usersId, 'extauth' => 1]);
 
         Session::init($auth);
 
         if (!$auth->auth_succeded) {
             // Typically: the account has no profile / no right to connect.
             $errors = $auth->getErrors();
-            return array_map('strval', count($errors) > 0 ? $errors : ['You are not allowed to connect to GLPI.']);
+            $errors = array_map('strval', count($errors) > 0 ? $errors : ['You are not allowed to connect to GLPI.']);
+            Logger::error('GLPI refused to open the session', [
+                'users_id' => $usersId,
+                'errors'   => implode(' / ', $errors),
+            ]);
+            return $errors;
         }
 
         if ($redirect !== null && $redirect !== '') {
             unset($_SESSION[SsoClient::REDIRECT_KEY]);
-            Toolbox::manageRedirect($redirect);
+            Logger::info('GLPI session opened, returning to the requested page', [
+                'users_id' => $usersId,
+                'redirect' => $redirect,
+            ]);
+            SsoClient::redirectTo($redirect);
         }
+
+        Logger::info('GLPI session opened', ['users_id' => $usersId]);
 
         Auth::redirectIfAuthenticated();
 
         // Should never be reached (redirectIfAuthenticated throws when logged in).
+        Logger::error('SSO login succeeded but the final redirect did not happen', ['users_id' => $usersId]);
         return ['SSO login succeeded but the redirect failed. Please retry.'];
     }
 
