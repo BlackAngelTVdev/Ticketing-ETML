@@ -4,8 +4,9 @@ Plugin GLPI qui remplace **tous les logos GLPI** (menu du haut, barre
 latérale repliée, page de connexion, thème sombre et icône de l'onglet du
 navigateur) et corrige quelques éléments d'interface.
 
-Tout se règle depuis **Configuration ▸ Plugins ▸ Branding** : aucun
-fichier de code n'est à modifier.
+Tout se règle depuis **Configuration ▸ Branding** : le plugin ajoute
+lui-même son entrée dans le menu *Configuration*, juste en dessous de
+*Plugins*. Aucun fichier de code n'est à modifier.
 
 ## Installation
 
@@ -18,13 +19,15 @@ fichier de code n'est à modifier.
      php bin/console plugin:install branding
      php bin/console plugin:activate branding
      ```
-3. Ouvrez **Configuration ▸ Plugins ▸ Branding** (bouton *Configuration*)
-   et téléversez vos logos.
+3. Ouvrez **Configuration ▸ Branding** (l'entrée est placée sous *Plugins* ;
+   le lien reste aussi disponible dans *Configuration ▸ Plugins*) et
+   téléversez vos logos.
 
 ## Configuration
 
-La page de configuration (`/plugins/branding/front/config.php`, réservée
-aux profils ayant le droit de modifier la configuration) permet de :
+La page de configuration (`/plugins/branding/front/config.php`, affichée
+dans le menu *Configuration ▸ Branding* et réservée aux profils ayant le
+droit de modifier la configuration) permet de :
 
 * **téléverser un logo par emplacement** — un simple aperçu, la source
   actuelle et les boutons *Téléverser* / *Supprimer* sont affichés pour
@@ -65,6 +68,8 @@ par `js/branding.js`.
 Hooks utilisés (voir `setup.php`) :
 
 * `config_page` → lien *Configuration* dans la liste des plugins ;
+* `redefine_menus` → entrée **Branding** dans le menu *Configuration*,
+  en dessous de *Plugins* (`plugin_branding_redefine_menus()`) ;
 * `add_css` / `add_css_anonymous_page` → surcharge des variables et
   tweaks d'interface ;
 * `add_javascript` / `add_javascript_anonymous_page` → favicon ;

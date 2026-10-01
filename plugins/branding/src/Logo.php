@@ -3,14 +3,19 @@
 /**
  * ---------------------------------------------------------------------
  *
- * GLPI Branding plugin - logo discovery.
+ * GLPI Branding plugin - logo files.
  *
- * The whole point of this plugin is to let you drop a logo file directly
- * in the plugin folder and have every GLPI logo replaced by it. This class
- * locates those files once and serves them through front/logo.php.
+ * Locates the logo files used across the interface and manages the ones
+ * uploaded from the plugin configuration page.
  *
- * Recognised files (first found wins), placed either in `pics/` or at the
- * root of the plugin:
+ * Two places are searched, in this order:
+ *
+ *   1. the plugin storage directory (files/_plugins/branding), filled in
+ *      by the configuration page - no code change needed;
+ *   2. the plugin itself: `pics/` then the plugin root, so a logo can
+ *      still be shipped directly with the plugin.
+ *
+ * Recognised files (first found wins):
  *
  *   logo.*                 logo used everywhere (fallback for all kinds)
  *   logo-light.*           logo drawn on a dark background (top menu)
@@ -31,6 +36,8 @@
 
 namespace GlpiPlugin\Branding;
 
+use RuntimeException;
+
 final class Logo
 {
     /**
@@ -42,6 +49,30 @@ final class Logo
      * Extensions accepted for the favicon (in preference order).
      */
     public const FAVICON_EXTENSIONS = ['ico', 'png', 'svg', 'webp', 'gif'];
+
+    /**
+     * Maximum size of an uploaded logo (2 MB).
+     */
+    public const MAX_UPLOAD_BYTES = 2097152;
+
+    /**
+     * Base names a logo can be stored/uploaded under, with their label
+     * for the configuration page.
+     *
+     * @var array<string, string>
+     */
+    public const LABELS = [
+        'logo'          => 'Logo principal (utilisé partout)',
+        'light'         => 'Logo sur fond sombre (menu du haut)',
+        'dark'          => 'Logo sur fond clair',
+        'reduced'       => 'Logo réduit (barre latérale repliée)',
+        'login'         => 'Logo de la page de connexion',
+        'light-reduced' => 'Logo réduit sur fond sombre',
+        'dark-reduced'  => 'Logo réduit sur fond clair',
+        'light-login'   => 'Logo de connexion (thème sombre)',
+        'dark-login'    => 'Logo de connexion (thème clair)',
+        'favicon'       => 'Favicon (onglet du navigateur)',
+    ];
 
     /**
      * Content type sent by front/logo.php, keyed by extension.
@@ -77,8 +108,7 @@ final class Logo
     ];
 
     /**
-     * Absolute path of the plugin directory (its parent is the GLPI
-     * `plugins/` directory).
+     * Absolute path of the plugin directory.
      */
     public static function dir(): string
     {
@@ -86,7 +116,29 @@ final class Logo
     }
 
     /**
-     * Kinds accepted by front/logo.php and the CSS stylesheet.
+     * Directory holding the files uploaded through the configuration
+     * page (outside the plugin code, in GLPI's writable data directory).
+     */
+    public static function storageDir(): string
+    {
+        if (defined('GLPI_VAR_DIR') && GLPI_VAR_DIR !== '') {
+            return rtrim((string) GLPI_VAR_DIR, '/') . '/_plugins/branding';
+        }
+
+        return self::dir() . '/var';
+    }
+
+    /**
+     * Whether the given base name (see LABELS) is handled.
+     */
+    public static function isKnownName(string $name): bool
+    {
+        return array_key_exists($name, self::LABELS);
+    }
+
+    /**
+     * Kinds accepted by front/logo.php and the CSS stylesheet. Kinds and
+     * base names are the same list.
      */
     public static function isKnownKind(string $kind): bool
     {
@@ -94,9 +146,9 @@ final class Logo
     }
 
     /**
-     * Whether at least one real logo has been dropped in the plugin.
+     * Whether at least one real logo is available (uploaded or bundled).
      *
-     * Used to avoid injecting anything (and showing a broken image) when
+     * Used to avoid injecting logo CSS (and showing a broken image) when
      * the plugin is installed but not customised yet.
      */
     public static function hasLogo(): bool
@@ -126,7 +178,7 @@ final class Logo
 
     /**
      * Absolute path of the file to use for the given kind, or null when
-     * nothing was dropped.
+     * nothing is available.
      */
     public static function resolve(string $kind): ?string
     {
@@ -134,6 +186,43 @@ final class Logo
             $file = self::find($name);
             if ($file !== null) {
                 return $file;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Absolute path of an uploaded file for the given base name, or null.
+     */
+    public static function stored(string $name): ?string
+    {
+        $directory = self::storageDir();
+
+        return self::locate($directory, $name, $directory);
+    }
+
+    /**
+     * Absolute path of a file bundled with the plugin (`pics/` then the
+     * plugin root), or null.
+     *
+     * Bundled files follow the `logo-<kind>.<ext>` naming documented in
+     * pics/README.md (`logo.png`, `logo-light.png`, `logo-login.png`, …).
+     * The bare `<kind>.<ext>` form is also accepted, as a convenience.
+     */
+    public static function bundled(string $name): ?string
+    {
+        $base = self::dir();
+        $candidates = in_array($name, ['logo', 'favicon'], true)
+            ? [$name]
+            : ['logo-' . $name, $name];
+
+        foreach ($candidates as $candidate) {
+            foreach ([$base . '/pics', $base] as $directory) {
+                $file = self::locate($directory, $candidate, $base);
+                if ($file !== null) {
+                    return $file;
+                }
             }
         }
 
@@ -151,34 +240,139 @@ final class Logo
     }
 
     /**
-     * Look for `<name>.<extension>` in `pics/` then at the plugin root.
+     * Accepted extensions for a given base name.
      *
-     * The path is resolved with realpath() and checked to stay inside the
-     * plugin directory: only files bundled with the plugin are ever
-     * served, never an arbitrary path.
+     * @return string[]
+     */
+    public static function extensions(string $name): array
+    {
+        return $name === 'favicon' ? self::FAVICON_EXTENSIONS : self::EXTENSIONS;
+    }
+
+    /**
+     * Store an uploaded logo in the plugin storage directory.
+     *
+     * @throws RuntimeException when the file is missing, too big or not a
+     *                          supported image.
+     */
+    public static function upload(string $name, string $tmp_path, string $original_name): void
+    {
+        if (!self::isKnownName($name)) {
+            throw new RuntimeException('Type de logo inconnu.');
+        }
+
+        $extension = strtolower(pathinfo($original_name, PATHINFO_EXTENSION));
+        if (!in_array($extension, self::extensions($name), true)) {
+            throw new RuntimeException(sprintf(
+                'Format « %s » non supporté (formats acceptés : %s).',
+                $extension === '' ? '?' : $extension,
+                implode(', ', self::extensions($name))
+            ));
+        }
+
+        if (!is_file($tmp_path) || !is_uploaded_file($tmp_path)) {
+            throw new RuntimeException('Fichier uploadé introuvable.');
+        }
+
+        $size = filesize($tmp_path);
+        if ($size === false || $size <= 0) {
+            throw new RuntimeException('Le fichier reçu est vide.');
+        }
+        if ($size > self::MAX_UPLOAD_BYTES) {
+            throw new RuntimeException(sprintf(
+                'Fichier trop volumineux (%s Mo, maximum %s Mo).',
+                round($size / 1048576, 1),
+                round(self::MAX_UPLOAD_BYTES / 1048576, 1)
+            ));
+        }
+
+        if (!self::looksLikeImage($tmp_path, $extension)) {
+            throw new RuntimeException('Le fichier ne semble pas être une image valide.');
+        }
+
+        $directory = self::storageDir();
+        if (!is_dir($directory) && !@mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new RuntimeException(sprintf('Impossible de créer le dossier de stockage « %s ».', $directory));
+        }
+
+        self::remove($name);
+
+        $target = $directory . '/' . $name . '.' . $extension;
+        if (!@move_uploaded_file($tmp_path, $target)) {
+            throw new RuntimeException('Impossible d\'enregistrer le logo.');
+        }
+        @chmod($target, 0644);
+    }
+
+    /**
+     * Delete the uploaded files for a given base name.
+     */
+    public static function remove(string $name): void
+    {
+        $directory = self::storageDir();
+        if (!is_dir($directory)) {
+            return;
+        }
+
+        foreach (self::extensions($name) as $extension) {
+            foreach ([$extension, strtoupper($extension)] as $suffix) {
+                $path = $directory . '/' . $name . '.' . $suffix;
+                if (is_file($path)) {
+                    @unlink($path);
+                }
+            }
+        }
+    }
+
+    /**
+     * Uploaded file if any, bundled file otherwise.
      */
     private static function find(string $name): ?string
     {
-        $base        = self::dir();
-        $directories = [$base . '/pics', $base];
-        $extensions  = $name === 'favicon' ? self::FAVICON_EXTENSIONS : self::EXTENSIONS;
+        return self::stored($name) ?? self::bundled($name);
+    }
 
-        foreach ($directories as $directory) {
-            foreach ($extensions as $extension) {
-                foreach ([$extension, strtoupper($extension)] as $suffix) {
-                    $path = $directory . '/' . $name . '.' . $suffix;
-                    if (!is_file($path)) {
-                        continue;
-                    }
+    /**
+     * Look for `<name>.<extension>` in a directory.
+     *
+     * The path is resolved with realpath() and checked to stay inside the
+     * expected base directory: only bundled/uploaded files are ever
+     * served, never an arbitrary path.
+     */
+    private static function locate(string $directory, string $name, string $base): ?string
+    {
+        if (!is_dir($directory)) {
+            return null;
+        }
 
-                    $real = realpath($path);
-                    if ($real !== false && str_starts_with($real, $base . DIRECTORY_SEPARATOR)) {
-                        return $real;
-                    }
+        foreach (self::extensions($name) as $extension) {
+            foreach ([$extension, strtoupper($extension)] as $suffix) {
+                $path = $directory . '/' . $name . '.' . $suffix;
+                if (!is_file($path)) {
+                    continue;
+                }
+
+                $real = realpath($path);
+                if ($real !== false && str_starts_with($real, rtrim($base, '/') . DIRECTORY_SEPARATOR)) {
+                    return $real;
                 }
             }
         }
 
         return null;
+    }
+
+    /**
+     * Cheap sanity check on the uploaded content.
+     */
+    private static function looksLikeImage(string $path, string $extension): bool
+    {
+        if ($extension === 'svg') {
+            $head = (string) @file_get_contents($path, false, null, 0, 4096);
+
+            return stripos($head, '<svg') !== false;
+        }
+
+        return @getimagesize($path) !== false;
     }
 }
