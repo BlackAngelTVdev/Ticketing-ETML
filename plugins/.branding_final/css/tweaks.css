@@ -1,0 +1,29 @@
+/*
+ * ---------------------------------------------------------------------
+ *
+ * GLPI Branding plugin - interface tweaks.
+ *
+ * Loaded on every page, whether or not a logo has been dropped in the
+ * plugin.
+ *
+ * ---------------------------------------------------------------------
+ */
+
+/*
+ * Hide the "Show as map" toggle of the search results toolbar.
+ *
+ * GLPI renders a table/map switch above every list whose itemtype has a
+ * location (see `may_be_located` in
+ * templates/components/search/controls.html.twig). Tickets are always
+ * "locatable", so the map button shows up on the Tickets page while it
+ * brings nothing to a pure ticketing instance and only clutters the
+ * toolbar (issue #3).
+ *
+ * Only the map button is hidden: the "Show as table" button and the
+ * table view stay available, and a user landing on the map view can
+ * still switch back to the table.
+ */
+label[for="show_as_map"],
+input#show_as_map {
+    display: none !important;
+}

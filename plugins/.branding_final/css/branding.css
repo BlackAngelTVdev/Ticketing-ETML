@@ -1,0 +1,64 @@
+/*
+ * ---------------------------------------------------------------------
+ *
+ * GLPI Branding plugin - logo overrides.
+ *
+ * GLPI 11 renders every logo with a CSS custom property declared in
+ * `css/includes/_base.scss`:
+ *
+ *   :root { --glpi-logo: var(--glpi-logo-light); ... }
+ *   .page            .glpi-logo { background: var(--glpi-logo) no-repeat; }
+ *   .page-anonymous  .glpi-logo { content: var(--glpi-logo-dark-login); }
+ *
+ * Redefining those variables is therefore enough to replace the logo
+ * everywhere (top menu, collapsed sidebar, login page, dark theme).
+ * The plugin redefines them *after* GLPI and the custom themes, so these
+ * declarations win at equal specificity.
+ *
+ * Every value points at front/logo.php, which serves the file dropped in
+ * the plugin folder (`../` is resolved from this stylesheet URL, i.e.
+ * /plugins/branding/css/branding.css).
+ *
+ * ---------------------------------------------------------------------
+ */
+
+:root,
+:root[data-glpi-theme-dark="1"] {
+    /* Top menu / main logo, drawn on the dark sidebar background. */
+    --glpi-logo: url("../front/logo.php?kind=light");
+    --glpi-logo-light: url("../front/logo.php?kind=light");
+
+    /* Small square logo of the collapsed sidebar. */
+    --glpi-logo-reduced: url("../front/logo.php?kind=light-reduced");
+    --glpi-logo-light-reduced: url("../front/logo.php?kind=light-reduced");
+
+    /* Logos meant for a light background. */
+    --glpi-logo-dark: url("../front/logo.php?kind=dark");
+    --glpi-logo-dark-reduced: url("../front/logo.php?kind=dark-reduced");
+
+    /* Login page logos (light theme uses the "dark" one). */
+    --glpi-logo-light-login: url("../front/logo.php?kind=light-login");
+    --glpi-logo-dark-login: url("../front/logo.php?kind=dark-login");
+}
+
+/*
+ * The login page GLPI styles the logo with the `content` property, which
+ * renders the image at its intrinsic size and may overflow the card when
+ * the custom file is large. Replacing it with a background keeps the box
+ * the same and scales the logo down to fit.
+ */
+.page-anonymous .glpi-logo {
+    content: none;
+    background: var(--glpi-logo-dark-login) center / contain no-repeat;
+}
+
+:root[data-glpi-theme-dark="1"] .page-anonymous .glpi-logo {
+    background-image: var(--glpi-logo-light-login);
+}
+
+/* Keep custom logos inside their (fixed size) box on the other layouts. */
+.page .glpi-logo {
+    background-position: center;
+    background-size: contain;
+    background-repeat: no-repeat;
+}

@@ -31,7 +31,7 @@ function plugin_version_ssobridge(): array
     return [
         'name'         => 'SSO Bridge',
         'version'      => '1.0.0',
-        'author'       => 'SSO Bridge contributors',
+        'author'       => 'BlackAngelTV For ETML',
         'license'      => 'GPL-3.0-or-later',
         'homepage'     => '',
         'requirements' => [
