@@ -308,11 +308,23 @@ final class GlpiLoginService
     private static function syncTeacherProfile(int $usersId, int $entitiesId, array $roles): void
     {
         if (count($roles) === 0) {
-            Logger::debug('No SSO role returned: the teacher profile is left unchanged', ['users_id' => $usersId]);
+            Logger::warning('The SSO portal returned no role: the teacher profile is left unchanged', ['users_id' => $usersId]);
             return;
         }
 
-        if (self::hasTeacherRole($roles)) {
+        $isTeacher     = self::hasTeacherRole($roles);
+        $profile       = Config::teacherProfile();
+
+        // Logged at the info level (the default) so the decision can be
+        // checked without raising the journal verbosity.
+        Logger::info('Teacher role check', [
+            'users_id'        => $usersId,
+            'roles'           => implode(', ', $roles),
+            'is_teacher'      => $isTeacher ? 'yes' : 'no',
+            'teacher_profile' => $profile !== '' ? $profile : '(not configured, SSO_TEACHER_PROFILE is empty)',
+        ]);
+
+        if ($isTeacher) {
             self::grantTeacherProfile($usersId, $entitiesId);
             return;
         }
@@ -328,7 +340,7 @@ final class GlpiLoginService
     {
         $profile = Config::teacherProfile();
         if ($profile === '') {
-            Logger::debug('Teacher role found but SSO_TEACHER_PROFILE is not configured', ['users_id' => $usersId]);
+            Logger::warning('Teacher role found but SSO_TEACHER_PROFILE is not configured', ['users_id' => $usersId]);
             return;
         }
 

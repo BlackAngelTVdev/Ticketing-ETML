@@ -522,7 +522,6 @@ final class SsoClient
         Logger::info('Handling the SSO callback from a GLPI page', [
             'correlation' => $correlationId,
             'redirect'    => $redirect,
-            'roles'       => implode(', ', $identity['roles']),
         ]);
 
         // Consume the pending state *before* opening the GLPI session, so the
@@ -542,8 +541,9 @@ final class SsoClient
         }
 
         Logger::info('SSO identity validated', [
-            'username' => $identity['username'],
-            'email'    => self::maskEmail($identity['email']),
+            'username'    => $identity['username'],
+            'email'       => self::maskEmail($identity['email']),
+            'roles'       => implode(', ', $identity['roles']),
             'correlation' => $correlationId,
         ]);
 
