@@ -70,6 +70,10 @@ with GLPI:
 | `SSO_AUTO_CREATE_USERS`| `1` to create the GLPI user when the SSO account has no match (default `1`).          |
 | `SSO_DEFAULT_PROFILE`  | Profile for auto-created users: empty = GLPI default profile, `none` = no profile,   |
 |                        | or a profile name (e.g. `Self-Service`).                                             |
+| `SSO_TEACHER_PROFILE`  | Extra profile granted to teachers: a user whose SSO roles contain `Teachers`          |
+|                        | (`UUS_ALL_Teachers`, `UUS_ETML_Teachers`, ...) keeps its other profiles and also     |
+|                        | receives this one, at every login. It is removed again on the next login when the     |
+|                        | role is gone. Empty = disabled (default).                                            |
 | `SSO_AUTO_REDIRECT`    | `1` to redirect anonymous visitors of the login page straight to the SSO portal  |
 |                        | (default `0` = show the two login buttons). With   |
 |                        | auto-redirect on, append `?nosso=1` to any GLPI URL to reach the login form.   |
@@ -86,6 +90,7 @@ SSO_ACCESS_TOKEN=my-access-token
 SSO_CALLBACK_URI=https://glpi.example.org/plugins/ssobridge/front/callback.php
 SSO_AUTO_CREATE_USERS=1
 SSO_DEFAULT_PROFILE=Self-Service
+SSO_TEACHER_PROFILE=Teacher
 SSO_LOG_LEVEL=info
 ```
 
@@ -97,6 +102,16 @@ SSO_LOG_LEVEL=info
   created with the external auth type (`authtype = external`) and, when a
   profile is configured or a GLPI default profile exists, that profile is
   granted on the root entity;
+* the roles returned by the portal (`roles` in the `bridge/check` answer) are
+  read on every login: when one of them contains `Teachers`, the
+  `SSO_TEACHER_PROFILE` profile is added on top of the existing profiles
+  (existing accounts included). When the portal returns roles but none of
+  them is a teacher role, the profile is removed again — only the assignment
+  made by the plugin (`is_dynamic = 1`) is touched, a profile granted
+  manually by an administrator stays. The profile is also kept when it is
+  the GLPI default profile, the configured `SSO_DEFAULT_PROFILE`, or the last
+  profile of the account (an account without any profile cannot log in).
+  When the portal returns no role at all, nothing is changed;
 * if the account exists but is deactivated/deleted, the login is refused;
 * if the account has no profile at all, GLPI itself refuses the session
   ("you are not allowed to connect") until an administrator grants rights;

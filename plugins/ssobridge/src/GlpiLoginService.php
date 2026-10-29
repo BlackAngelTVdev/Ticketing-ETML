@@ -37,11 +37,14 @@ final class GlpiLoginService
      *                              /ServiceCatalog or /Helpdesk, or a same-host
      *                              absolute URL). Kept in session so it survives
      *                              the GLPI MFA pages round-trip.
+     * @param string[]    $roles    Roles sent by the SSO portal (a role
+     *                              containing "Teachers" marks a teacher, who
+     *                              also gets SSO_TEACHER_PROFILE).
      *
      * @return string[] Error messages (empty only when this method cannot
      *                  finish: the success path always throws a redirect).
      */
-    public static function login(string $email, string $username, ?string $redirect = null): array
+    public static function login(string $email, string $username, ?string $redirect = null, array $roles = []): array
     {
         global $DB;
 
@@ -57,6 +60,7 @@ final class GlpiLoginService
             'username' => $username,
             'email'    => $email,
             'redirect' => (string) $redirect,
+            'roles'    => implode(', ', $roles),
         ]);
 
         // ------------------------------------------------------------------
@@ -131,6 +135,12 @@ final class GlpiLoginService
         if ($email !== '') {
             self::attachEmail($usersId, $email);
         }
+
+        // ------------------------------------------------------------------
+        // 2b. Keep the teacher profile in sync with the SSO roles: granted in
+        //     addition to the other profiles, removed when the role is gone.
+        // ------------------------------------------------------------------
+        self::syncTeacherProfile($usersId, (int) $user->fields['entities_id'], $roles);
 
         // ------------------------------------------------------------------
         // 3. Update "last login" (like Auth::login() does for known users).
@@ -260,41 +270,194 @@ final class GlpiLoginService
         $userId = (int) $userId;
 
         // Give the new account a profile (otherwise GLPI refuses the session).
-        self::assignDefaultProfile($userId, (int) $user->fields['entities_id']);
+        self::assignProfile($userId, (int) $user->fields['entities_id'], Config::defaultProfile(), true);
 
         return $userId;
     }
 
     /**
-     * Assign the configured profile to an auto-created user.
-     * SSO_DEFAULT_PROFILE: '' => GLPI default profile, 'none' => no profile,
-     * otherwise a profile name.
+     * Does one of the SSO roles mark the user as a teacher?
+     * The portal uses e.g. UUS_ALL_Teachers, UUS_ETML_Teachers, ...
+     *
+     * @param string[] $roles
      */
-    private static function assignDefaultProfile(int $usersId, int $entitiesId): void
+    private static function hasTeacherRole(array $roles): bool
     {
-        global $DB;
-
-        $setting = strtolower(Config::defaultProfile());
-        if ($setting === 'none') {
-            return;
-        }
-
-        $profilesId = 0;
-        if ($setting === '') {
-            $profilesId = (int) Profile::getDefault();
-        } else {
-            $iterator = $DB->request([
-                'SELECT' => 'id',
-                'FROM'   => Profile::getTable(),
-                'WHERE'  => ['name' => $setting],
-                'LIMIT'  => 1,
-            ]);
-            foreach ($iterator as $row) {
-                $profilesId = (int) $row['id'];
+        foreach ($roles as $role) {
+            if (stripos($role, 'teacher') !== false) {
+                return true;
             }
         }
 
+        return false;
+    }
+
+    /**
+     * Keep SSO_TEACHER_PROFILE in sync with the SSO roles.
+     *
+     *  - one of the roles contains "Teachers" -> the profile is granted, on
+     *    top of the profiles the account already has;
+     *  - the portal returned roles but none of them is a teacher role -> the
+     *    profile is removed again (only the assignment made by the plugin:
+     *    it is stored with is_dynamic = 1, a manual assignment is left alone);
+     *  - the portal returned no role at all -> nothing happens, so a portal
+     *    that does not expose roles can never strip profiles.
+     *
+     * @param string[] $roles
+     */
+    private static function syncTeacherProfile(int $usersId, int $entitiesId, array $roles): void
+    {
+        if (count($roles) === 0) {
+            Logger::debug('No SSO role returned: the teacher profile is left unchanged', ['users_id' => $usersId]);
+            return;
+        }
+
+        if (self::hasTeacherRole($roles)) {
+            self::grantTeacherProfile($usersId, $entitiesId);
+            return;
+        }
+
+        self::revokeTeacherProfile($usersId);
+    }
+
+    /**
+     * Grant SSO_TEACHER_PROFILE to a teacher, on top of the profiles the
+     * account already has.
+     */
+    private static function grantTeacherProfile(int $usersId, int $entitiesId): void
+    {
+        $profile = Config::teacherProfile();
+        if ($profile === '') {
+            Logger::debug('Teacher role found but SSO_TEACHER_PROFILE is not configured', ['users_id' => $usersId]);
+            return;
+        }
+
+        self::assignProfile($usersId, $entitiesId, $profile, false, true);
+    }
+
+    /**
+     * Remove the teacher profile granted by the plugin when the user is no
+     * longer a teacher.
+     */
+    private static function revokeTeacherProfile(int $usersId): void
+    {
+        global $DB;
+
+        $profilesId = self::profileIdByName(Config::teacherProfile());
+        if ($profilesId === null || $profilesId <= 0) {
+            return; // not configured, or profile removed from GLPI
+        }
+
+        // Never remove the profile the account needs to be able to log in.
+        if ($profilesId === (int) Profile::getDefault()) {
+            Logger::warning('The teacher profile is the GLPI default profile: it is kept', ['profiles_id' => $profilesId]);
+            return;
+        }
+        $defaultSetting = strtolower(trim(Config::defaultProfile()));
+        if ($defaultSetting !== '' && $defaultSetting !== 'none' && self::profileIdByName($defaultSetting) === $profilesId) {
+            Logger::warning('The teacher profile is also SSO_DEFAULT_PROFILE: it is kept', ['profiles_id' => $profilesId]);
+            return;
+        }
+
+        // Only the rows the plugin created are removed (is_dynamic = 1); a
+        // profile granted manually by an administrator is left untouched.
+        $granted = $DB->request([
+            'FROM'  => 'glpi_profiles_users',
+            'WHERE' => [
+                'users_id'    => $usersId,
+                'profiles_id' => $profilesId,
+                'is_dynamic'  => 1,
+            ],
+        ]);
+        if (count($granted) === 0) {
+            return;
+        }
+
+        // Keep at least one profile: an account without any profile cannot
+        // open a GLPI session at all.
+        $remaining = $DB->request([
+            'FROM'  => 'glpi_profiles_users',
+            'WHERE' => [
+                'users_id' => $usersId,
+                'NOT'      => ['profiles_id' => $profilesId],
+            ],
+        ]);
+        if (count($remaining) === 0) {
+            Logger::warning('The teacher profile is the only profile of the account: it is kept', ['users_id' => $usersId]);
+            return;
+        }
+
+        $DB->delete('glpi_profiles_users', [
+            'users_id'    => $usersId,
+            'profiles_id' => $profilesId,
+            'is_dynamic'  => 1,
+        ]);
+
+        Logger::info('Removing the teacher profile: the teacher role is gone', [
+            'users_id'    => $usersId,
+            'profiles_id' => $profilesId,
+        ]);
+    }
+
+    /**
+     * Id of a GLPI profile by name, null when it does not exist.
+     */
+    private static function profileIdByName(string $name): ?int
+    {
+        global $DB;
+
+        $name = strtolower(trim($name));
+        if ($name === '' || $name === 'none') {
+            return null;
+        }
+
+        $iterator = $DB->request([
+            'SELECT' => 'id',
+            'FROM'   => Profile::getTable(),
+            'WHERE'  => ['name' => $name],
+            'LIMIT'  => 1,
+        ]);
+        $profilesId = 0;
+        foreach ($iterator as $row) {
+            $profilesId = (int) $row['id'];
+        }
         if ($profilesId <= 0) {
+            Logger::error('The configured GLPI profile does not exist', ['profile' => $name]);
+            return null;
+        }
+
+        return $profilesId;
+    }
+
+    /**
+     * Assign a profile to a user on the given entity.
+     *
+     * @param string $setting         Profile name, 'none' (no profile) or ''
+     *                                (GLPI default profile when $useGlpiDefault
+     *                                is true, disabled otherwise).
+     * @param bool   $useGlpiDefault  Whether an empty setting means "GLPI
+     *                                default profile" (SSO_DEFAULT_PROFILE) or
+     *                                "do nothing" (SSO_TEACHER_PROFILE).
+     * @param bool   $dynamic         Mark the assignment as managed outside
+     *                                GLPI (is_dynamic = 1), so the plugin can
+     *                                recognise and revoke it later.
+     */
+    private static function assignProfile(int $usersId, int $entitiesId, string $setting, bool $useGlpiDefault, bool $dynamic = false): void
+    {
+        global $DB;
+
+        $setting = strtolower(trim($setting));
+        if ($setting === 'none' || ($setting === '' && !$useGlpiDefault)) {
+            return;
+        }
+
+        if ($setting === '') {
+            $profilesId = (int) Profile::getDefault();
+        } else {
+            $profilesId = self::profileIdByName($setting);
+        }
+
+        if ($profilesId === null || $profilesId <= 0) {
             return;
         }
 
@@ -318,8 +481,15 @@ final class GlpiLoginService
             'profiles_id'  => $profilesId,
             'entities_id'  => $entitiesId,
             'is_recursive' => 0,
-            'is_dynamic'   => 0,
+            'is_dynamic'   => $dynamic ? 1 : 0,
         ]);
+
+        if ($dynamic) {
+            Logger::info('Granting the teacher profile', [
+                'users_id'    => $usersId,
+                'profiles_id' => $profilesId,
+            ]);
+        }
     }
 
     /**

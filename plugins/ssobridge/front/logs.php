@@ -94,6 +94,7 @@ $summary = [
     'Callback URL sent to portal' => $effective_callback,
     'SSO_AUTO_CREATE_USERS'       => Config::autoCreateUsers() ? '1' : '0',
     'SSO_DEFAULT_PROFILE'         => Config::defaultProfile() !== '' ? Config::defaultProfile() : '(GLPI default)',
+    'SSO_TEACHER_PROFILE'         => Config::teacherProfile() !== '' ? Config::teacherProfile() : '(disabled)',
     'SSO_AUTO_REDIRECT'           => Config::autoRedirect() ? '1' : '0',
     'SSO_LOG_LEVEL'               => Config::logLevel(),
     'Journal'                     => Logger::location(),

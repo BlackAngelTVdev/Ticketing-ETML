@@ -203,7 +203,7 @@ final class SsoClient
     /**
      * Retrieve the validated identity from the SSO portal.
      *
-     * @return array{email: string, username: string, error: string}
+     * @return array{email: string, username: string, roles: string[], error: string}
      */
     public static function retrieveLoginInfo(string $correlationId): array
     {
@@ -222,6 +222,7 @@ final class SsoClient
             return [
                 'email'    => '',
                 'username' => '',
+                'roles'    => [],
                 'error'    => sprintf('Cannot reach the SSO portal at "%s".', Config::portalUrl()),
             ];
         }
@@ -232,6 +233,7 @@ final class SsoClient
             return [
                 'email'    => '',
                 'username' => '',
+                'roles'    => [],
                 'error'    => 'Invalid response received from the SSO portal.',
             ];
         }
@@ -240,13 +242,26 @@ final class SsoClient
             return [
                 'email'    => '',
                 'username' => '',
+                'roles'    => [],
                 'error'    => (string) $data['error'],
             ];
+        }
+
+        $roles = self::extractRoles($data);
+        Logger::debug('SSO identity payload', [
+            'fields' => implode(', ', array_keys($data)),
+            'roles'  => implode(', ', $roles),
+        ]);
+        if (count($roles) === 0) {
+            Logger::warning('The SSO portal did not return any role for this user', [
+                'fields' => implode(', ', array_keys($data)),
+            ]);
         }
 
         return [
             'email'    => (string) ($data['email'] ?? ''),
             'username' => (string) ($data['username'] ?? ''),
+            'roles'    => $roles,
             'error'    => '',
         ];
     }
@@ -507,6 +522,7 @@ final class SsoClient
         Logger::info('Handling the SSO callback from a GLPI page', [
             'correlation' => $correlationId,
             'redirect'    => $redirect,
+            'roles'       => implode(', ', $identity['roles']),
         ]);
 
         // Consume the pending state *before* opening the GLPI session, so the
@@ -534,7 +550,8 @@ final class SsoClient
         $errors = GlpiLoginService::login(
             $identity['email'],
             $identity['username'],
-            $redirect !== '' ? $redirect : null
+            $redirect !== '' ? $redirect : null,
+            $identity['roles']
         );
 
         if (count($errors) > 0) {
@@ -546,6 +563,49 @@ final class SsoClient
         }
 
         return true;
+    }
+
+    /**
+     * Collect the roles sent by the SSO portal.
+     *
+     * The portal exposes them under `roles` in its bridge/check answer; the
+     * lookup is tolerant (also accepts `role` / `groups`, plain strings or
+     * lists) and walks nested objects so a payload such as
+     * `{"origin": {"roles": [...]}}` is understood as well.
+     *
+     * @return string[] Unique role names, in portal order.
+     */
+    private static function extractRoles(array $data): array
+    {
+        $roles = [];
+        self::collectRoles($data, $roles, 0);
+
+        return array_keys($roles);
+    }
+
+    /**
+     * @param array<string, bool> $roles
+     */
+    private static function collectRoles(mixed $node, array &$roles, int $depth): void
+    {
+        if (!is_array($node) || $depth > 4) {
+            return;
+        }
+
+        foreach ($node as $key => $value) {
+            if (is_string($key) && in_array(strtolower($key), ['roles', 'role', 'groups'], true)) {
+                foreach ((array) $value as $role) {
+                    if (is_string($role) && trim($role) !== '') {
+                        $roles[trim($role)] = true;
+                    }
+                }
+                continue;
+            }
+
+            if (is_array($value)) {
+                self::collectRoles($value, $roles, $depth + 1);
+            }
+        }
     }
 
     /**

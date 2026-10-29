@@ -38,6 +38,9 @@ final class Config
         //   'none' -> do not assign any profile
         //   other  -> profile name (e.g. 'Self-Service')
         'SSO_DEFAULT_PROFILE'  => '',
+        // Extra GLPI profile granted to teachers (SSO role containing
+        // "Teachers"), in addition to the profile above. Empty = disabled.
+        'SSO_TEACHER_PROFILE'  => '',
         // Redirect anonymous visitors of the GLPI login page straight to the
         // SSO portal (1) instead of only showing the "Login with SSO" button (0).
         // Append ?nosso=1 to any GLPI URL to keep the regular login form.
@@ -95,6 +98,14 @@ final class Config
     public static function defaultProfile(): string
     {
         return trim(self::get('SSO_DEFAULT_PROFILE'));
+    }
+
+    /**
+     * Extra profile granted to teachers (see DEFAULTS). Empty = disabled.
+     */
+    public static function teacherProfile(): string
+    {
+        return trim(self::get('SSO_TEACHER_PROFILE'));
     }
 
     /**
