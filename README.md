@@ -33,3 +33,6 @@ callback url = https://domaine.ex/ServiceCatalog
 ## Installation
 1. Installer [Proxmox](https://www.proxmox.com/en/)
 2. Importer le LXC fournit dans Proxmox
+
+## Travail restant
+Les tâches à faire peuvent être trouvées dans les Issues de la repo. En priorité il faut faire [ces tâches](https://github.com/BlackAngelTVdev/Ticketing-ETML/issues/4#issue-5759727082).
