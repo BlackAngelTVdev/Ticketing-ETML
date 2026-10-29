@@ -28,6 +28,8 @@
 - Date de fin
 - Catégorie
 
-
-
 callback url = https://domaine.ex/ServiceCatalog
+
+## Installation
+1. Installer [Proxmox](https://www.proxmox.com/en/)
+2. Importer le LXC fournit dans Proxmox
